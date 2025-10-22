@@ -246,34 +246,27 @@ contract SecondaryMarketStrict is ReentrancyGuard, ERC721Holder {
     /* ------------------------------ 购买 ------------------------ */
     /* ----------------------------------------------------------- */
 
-    function buy(uint256 id) external payable nonReentrant {
+    function buy(uint256 id, bool useUsdt) external payable nonReentrant {
         uint256 idx1 = _idxOfActivePlus1[id];
         require(idx1 > 0, "not active");
         uint256 idx = idx1 - 1;
 
         Listing memory it = activeListings[idx];
         require(msg.sender != it.seller, "self buy");
-        require(msg.value == it.nativePrice, "bad native");
 
-        // 1) 买家 USDT -> 合约（失败回滚）
-        if (it.usdtPrice > 0) {
-            usdt.safeTransferFrom(msg.sender, address(this), it.usdtPrice);
-        }
-
-        // 2) 成交：先移除数组项（若后续转账失败会整体 revert，状态回滚，不会残留脏状态）
-        _removeFromActive(idx);
-        _removeFromSeller(it.seller, id);
-
-        // 3) 向卖家“转出”款项（严格模式：失败必须 revert）
-        if (it.usdtPrice > 0) {
-            usdt.safeTransfer(it.seller, it.usdtPrice);
-        }
-        if (it.nativePrice > 0) {
+        if (useUsdt) {
+            require(it.usdtPrice > 0, "usdt price not set");
+            usdt.safeTransferFrom(msg.sender, it.seller, it.usdtPrice);
+        } else {
+            require(msg.value > 0, "native price not set");
+            require(msg.value == it.nativePrice, "bad native");
             (bool ok, ) = payable(it.seller).call{value: it.nativePrice}("");
             require(ok, "native transfer failed");
         }
+        
+        _removeFromActive(idx);
+        _removeFromSeller(it.seller, id);
 
-        // 4) 把 NFT 交付给买家（失败 revert）
         IERC721(it.nft).safeTransferFrom(address(this), msg.sender, it.tokenId);
 
         emit Purchased(id, it.seller, msg.sender, it.usdtPrice, it.nativePrice);

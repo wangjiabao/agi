@@ -29,6 +29,7 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
         uint64  startTime;
         uint64  bidExtendWindow;
         uint256 usdtFixed;
+        uint256 nativeFixed;
         uint256 step;
         AuctionStatus status;
         address currentBidder;
@@ -42,16 +43,8 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
     uint256 public withdrawableUSDT;
     uint256 public withdrawableNative;
 
-    /* ---------------- 普通节点结构 ---------------- */
-    struct NormalListing {
-        uint256 id;
-        uint256 usdtNeeded;
-        uint256 nativeNeeded;
-    }
-
-    NormalListing[] private _normalListings;
-    mapping(uint256 => uint256) private _idxOf;
-    uint256 private _normalIdNonce;
+    uint256 public usdtNeeded;
+    uint256 public nativeNeeded;
 
     /* ---------------- 构造函数 ---------------- */
     constructor(address superNodeNft_, address normalNodeNft_, address usdt_) {
@@ -62,22 +55,6 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ADMIN_ROLE, msg.sender);
-    }
-
-    /* ---------------- 管理 ---------------- */
-    function setSuperNodeNft(address a) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(a != address(0), "zero");
-        superNodeNft = a;
-    }
-
-    function setNormalNodeNft(address a) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(a != address(0), "zero");
-        normalNodeNft = a;
-    }
-
-    function setUSDT(address a) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(a != address(0), "zero");
-        usdt = IERC20(a);
     }
 
     receive() external payable {}
@@ -111,6 +88,7 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
         Auction memory a;
         a.startTime       = startTime;
         a.usdtFixed       = usdtFixed;
+        a.nativeFixed     = startNativePrice;
         a.currentNative   = startNativePrice;
         a.step            = step;
         a.bidExtendWindow = bidExtendWindow;
@@ -165,7 +143,7 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
         emit BidPlaced(auctionId, msg.sender, a.usdtFixed, msg.value, uint64(block.timestamp));
     }
 
-    /* ---------------- 拍卖结算 ---------------- */
+    /* ---------------- 拍卖完成，结算铸造nft ---------------- */
     function settleAuction(uint256 auctionId) public nonReentrant {
         require(auctionId < _auctions.length, "bad id");
         Auction storage a = _auctions[auctionId];
@@ -188,75 +166,22 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
         emit AuctionEnded(auctionId, a.currentBidder, a.usdtFixed, a.currentNative, nftId);
     }
 
-    /* ---------------- 普通节点上架 ---------------- */
-    function listNormal(uint256 usdtNeeded, uint256 nativeNeeded)
-        public
-        onlyRole(ADMIN_ROLE)
-        returns (uint256 id)
-    {
-        require(usdtNeeded > 0 || nativeNeeded > 0, "empty price");
-        id = ++_normalIdNonce;
-
-        NormalListing memory it = NormalListing({
-            id: id,
-            usdtNeeded: usdtNeeded,
-            nativeNeeded: nativeNeeded
-        });
-
-        _idxOf[id] = _normalListings.length + 1;
-        _normalListings.push(it);
-
-        emit NormalListed(id, usdtNeeded, nativeNeeded);
-    }
-
-    function listNormalBatch(uint256[] calldata usdtList, uint256[] calldata nativeList)
-        external
-        onlyRole(ADMIN_ROLE)
-    {
-        require(usdtList.length == nativeList.length, "len mismatch");
-        uint256 n = usdtList.length;
-        for (uint256 i = 0; i < n; i++) {
-            listNormal(usdtList[i], nativeList[i]);
-        }
-        emit NormalBatchListed(n);
-    }
-
-    // ========== 模块二：分页查询正在上架的普通节点 ==========
-    function normalListingsCount() external view returns (uint256) {
-        return _normalListings.length;
-    }
-
-    function getNormalListings(uint256 start, uint256 limit)
-        external
-        view
-        returns (NormalListing[] memory slice)
-    {
-        uint256 total = _normalListings.length;
-        if (start >= total) return new NormalListing[](0);
-        uint256 end = start + limit;
-        if (end > total) end = total;
-        uint256 size = end - start;
-
-        slice = new NormalListing[](size);
-        for (uint256 i = 0; i < size; i++) {
-            slice[i] = _normalListings[start + i];
-        }
+    /* ---------------- 普通节点设置价格 ---------------- */
+    function setNormal(uint256 _usdtNeeded, uint256 _nativeNeeded) public onlyRole(ADMIN_ROLE) {
+        usdtNeeded = _usdtNeeded;
+        nativeNeeded = _nativeNeeded;
+        emit NormalSeted(usdtNeeded, nativeNeeded);
     }
 
     /* ---------------- 购买普通节点 ---------------- */
-    function buyNormal(uint256 id) external payable nonReentrant {
-        uint256 idx1 = _idxOf[id];
-        require(idx1 > 0, "not listed");
-        uint256 idx = idx1 - 1;
-        NormalListing memory it = _normalListings[idx];
-
-        if (it.usdtNeeded > 0) {
-            usdt.safeTransferFrom(msg.sender, address(this), it.usdtNeeded);
-            withdrawableUSDT += it.usdtNeeded;
+    function buyNormal() external payable nonReentrant {
+        if (usdtNeeded > 0) {
+            usdt.safeTransferFrom(msg.sender, address(this), usdtNeeded);
+            withdrawableUSDT += usdtNeeded;
         }
-        if (it.nativeNeeded > 0) {
-            require(msg.value == it.nativeNeeded, "native mismatch");
-            withdrawableNative += it.nativeNeeded;
+        if (nativeNeeded > 0) {
+            require(msg.value == nativeNeeded, "native mismatch");
+            withdrawableNative += nativeNeeded;
         }
 
         uint256 nftId;
@@ -266,32 +191,7 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
             nftId = 0;
         }
 
-        _removeNormalByIndex(idx);
-        emit NormalPurchased(id, msg.sender, it.usdtNeeded, it.nativeNeeded, nftId);
-    }
-
-    /* ---------------- 下架与内部工具 ---------------- */
-    function delistNormal(uint256 id) external onlyRole(ADMIN_ROLE) {
-        uint256 idx1 = _idxOf[id];
-        require(idx1 > 0, "not listed");
-        uint256 idx = idx1 - 1;
-        _removeNormalByIndex(idx);
-        emit NormalDelisted(id);
-    }
-
-    function _removeNormalByIndex(uint256 i) internal {
-        uint256 n = _normalListings.length;
-        require(i < n, "bad index");
-        uint256 removedId = _normalListings[i].id;
-        uint256 last = n - 1;
-        if (i != last) {
-            NormalListing memory tail = _normalListings[last];
-            _normalListings[i] = tail;
-            _idxOf[tail.id] = i + 1;
-        }
-        _normalListings.pop();
-        delete _idxOf[removedId];
-        emit NormalArrayCompacted(i);
+        emit NormalPurchased(msg.sender, usdtNeeded, nativeNeeded, nftId);
     }
 
     /* ---------------- 提现 ---------------- */
@@ -326,9 +226,6 @@ contract AuctionHouseNodes is AccessControl, ReentrancyGuard {
     event RefundFailed(address indexed user, uint8 assetType); // 0=USDT, 1=Native
     event AuctionEnded(uint256 indexed auctionId, address winner, uint256 usdtFixed, uint256 nativeAmount, uint256 nftId);
 
-    event NormalListed(uint256 indexed id, uint256 usdtNeeded, uint256 nativeNeeded);
-    event NormalBatchListed(uint256 count);
-    event NormalDelisted(uint256 indexed id);
-    event NormalPurchased(uint256 indexed id, address indexed buyer, uint256 usdtPaid, uint256 nativePaid, uint256 nftId);
-    event NormalArrayCompacted(uint256 removedIndex);
+    event NormalSeted(uint256 usdtNeeded, uint256 nativeNeeded);
+    event NormalPurchased(address indexed buyer, uint256 usdtPaid, uint256 nativePaid, uint256 nftId);
 }
