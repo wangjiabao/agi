@@ -38,8 +38,8 @@ interface IDivSuperOnly {
 contract MapGrid is Initializable, IERC721Receiver, ReentrancyGuard {
     using Address for address payable;
 
-    uint256 public constant LOCK_SECONDS = 1 hours;
-    uint256 public constant LOCK_TWO_SECONDS = 15 minutes;
+    uint256 public constant LOCK_SECONDS = 500 days;
+    uint256 public constant LOCK_TWO_SECONDS = 3 days;
     int256  public constant ONE_18 = 1e18;
 
     address public factory;
